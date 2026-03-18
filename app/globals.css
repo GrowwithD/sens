@@ -24,3 +24,44 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 10mm;
+  }
+
+  body {
+    background: white;
+    color: black;
+    font-size: 9px;
+  }
+
+  .print\:hidden {
+    display: none !important;
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  th, td {
+    border: 1px solid #999 !important;
+    padding: 2px 4px !important;
+  }
+
+  /* Pastikan warna background header kuning ikut tercetak */
+  th {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Input tampil sebagai teks biasa saat print */
+  input[type="number"] {
+    border: none;
+    background: transparent;
+    text-align: center;
+    width: 100%;
+  }
+}
