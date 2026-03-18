@@ -257,6 +257,36 @@ export default function OpnamePage() {
     ? products.filter(p => storeQty[p.code] !== undefined || storageQty[p.code] !== undefined).length
     : 0;
 
+  function buildSummary() {
+    const selisihRows = products.map((product) => {
+      const filled = csvData[product.code];
+      const sw = filled?.stockwiz;
+      const price = filled?.price;
+      const store = storeQty[product.code] ?? 0;
+      const storage = storageQty[product.code] ?? 0;
+      const hasInput = storeQty[product.code] !== undefined || storageQty[product.code] !== undefined;
+      const jumlahRiil = store + storage;
+      const selisihQty = hasInput && sw !== undefined ? jumlahRiil - sw : undefined;
+      const selisihValue = selisihQty !== undefined && price !== undefined && price > 1 ? selisihQty * price : undefined;
+      const status = selisihQty === undefined ? "" : selisihQty < 0 ? "Minus" : selisihQty > 0 ? "Plus" : "OK";
+      return { product, sw, price, store, storage, jumlahRiil, selisihQty, selisihValue, status };
+    }).filter(r => r.selisihQty !== undefined && r.selisihQty !== 0);
+
+    const totalMinusQty = selisihRows.filter(r => r.selisihQty! < 0).reduce((s, r) => s + r.selisihQty!, 0);
+    const totalPlusQty  = selisihRows.filter(r => r.selisihQty! > 0).reduce((s, r) => s + r.selisihQty!, 0);
+    const totalMinusVal = selisihRows.filter(r => r.selisihValue !== undefined && r.selisihValue < 0).reduce((s, r) => s + r.selisihValue!, 0);
+    const totalPlusVal  = selisihRows.filter(r => r.selisihValue !== undefined && r.selisihValue > 0).reduce((s, r) => s + r.selisihValue!, 0);
+    return {
+      selisihRows,
+      totalMinusQty,
+      totalPlusQty,
+      totalMinusVal,
+      totalPlusVal,
+      netQty: totalPlusQty + totalMinusQty,
+      netValue: totalPlusVal + totalMinusVal,
+    };
+  }
+
   function buildRows() {
     return products.map((product, index) => {
       const filled = csvData[product.code];
@@ -288,16 +318,41 @@ export default function OpnamePage() {
 
   function exportCSV() {
     const rows = buildRows();
+    const { selisihRows, totalMinusQty, totalPlusQty, totalMinusVal, totalPlusVal, netQty, netValue } = buildSummary();
     const headers = ["No.", "Kode (Inci)", "Nama Produk", "Price (Rp)", "Stockwiz (SW)", "Store", "Storage", "Jumlah Riil", "Selisih QTY", "Selisih Value", "Status"];
-    const csvLines = [
+    const esc = (v: string) => v.includes(",") ? `"${v}"` : v;
+
+    const csvLines: string[] = [
+      "STOCK OPNAME — SENSATIA BOTANICALS",
+      `Tanggal Export,${new Date().toLocaleDateString("id-ID")}`,
+      "",
+      // Main table
       headers.join(","),
-      ...rows.map((row) =>
-        headers.map((h) => {
-          const val = String(row[h as keyof typeof row] ?? "");
-          return val.includes(",") ? `"${val}"` : val;
-        }).join(",")
-      ),
+      ...rows.map((row) => headers.map((h) => esc(String(row[h as keyof typeof row] ?? ""))).join(",")),
+      "",
+      // Summary aggregates
+      "=== RINGKASAN SELISIH ===",
+      `Produk Selisih,${selisihRows.length} dari ${totalProducts} SKU`,
+      `Total Minus,${totalMinusQty} pcs,${totalMinusVal}`,
+      `Total Plus,${totalPlusQty} pcs,${totalPlusVal}`,
+      `Net Selisih,${netQty} pcs,${netValue}`,
+      "",
+      // Summary detail
+      "Kode (Inci),Nama Produk,SW,Store,Storage,Jumlah,Selisih QTY,Selisih Value,Status",
+      ...selisihRows.map(r => [
+        r.product.code,
+        esc(r.product.name),
+        r.sw ?? "",
+        r.store,
+        r.storage,
+        r.jumlahRiil,
+        r.selisihQty ?? "",
+        r.selisihValue ?? "",
+        r.status,
+      ].join(",")),
+      `TOTAL,,,,,,${netQty},${netValue},`,
     ];
+
     const blob = new Blob(["\uFEFF" + csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -309,13 +364,16 @@ export default function OpnamePage() {
 
   async function exportExcel() {
     const rows = buildRows();
+    const { selisihRows, totalMinusQty, totalPlusQty, totalMinusVal, totalPlusVal, netQty, netValue } = buildSummary();
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("Stock Opname");
 
     const YELLOW = "FFFDD835";
     const BLACK = "FF000000";
     const RED = "FFCC0000";
     const GREEN = "FF2E7D32";
+    const LIGHT_RED = "FFFFEBEE";
+    const LIGHT_GREEN = "FFE8F5E9";
+    const GRAY = "FFF5F5F5";
 
     const headerStyle = (): Partial<ExcelJS.Style> => ({
       fill: { type: "pattern", pattern: "solid", fgColor: { argb: YELLOW } },
@@ -329,7 +387,7 @@ export default function OpnamePage() {
       },
     });
 
-    const cellBorder: Partial<ExcelJS.Style> = {
+    const thinBorder: Partial<ExcelJS.Style> = {
       border: {
         top: { style: "thin", color: { argb: "FFCCCCCC" } },
         bottom: { style: "thin", color: { argb: "FFCCCCCC" } },
@@ -339,6 +397,9 @@ export default function OpnamePage() {
       font: { size: 9 },
       alignment: { vertical: "middle" },
     };
+
+    // ── Sheet 1: Stock Opname (full table) ──────────────────────
+    const ws = wb.addWorksheet("Stock Opname");
 
     ws.addRow(["Unit Kerja", ": Sensatia"]);
     ws.addRow(["Tanggal Audit", ":"]);
@@ -358,30 +419,20 @@ export default function OpnamePage() {
     ws.getCell("F5").value = "Jumlah Riil";
     ws.getCell("I5").value = "Total Selisih";
     ws.getCell("K5").value = "Status";
-    ws.mergeCells("A5:A6");
-    ws.mergeCells("C5:C6");
-    ws.mergeCells("F5:H5");
-    ws.mergeCells("I5:J5");
-    ws.mergeCells("K5:K6");
+    ws.mergeCells("A5:A6"); ws.mergeCells("C5:C6"); ws.mergeCells("F5:H5"); ws.mergeCells("I5:J5"); ws.mergeCells("K5:K6");
 
     const h2 = ws.getRow(6);
     h2.height = 18;
     ["A6","B6","C6","D6","E6","F6","G6","H6","I6","J6","K6"].forEach((addr) => Object.assign(ws.getCell(addr).style, headerStyle()));
-    ws.getCell("B6").value = "(Inci)";
-    ws.getCell("D6").value = "(Rp)";
-    ws.getCell("E6").value = "(SW)";
-    ws.getCell("F6").value = "Store";
-    ws.getCell("G6").value = "Storage";
-    ws.getCell("H6").value = "Jumlah";
-    ws.getCell("I6").value = "QTY";
-    ws.getCell("J6").value = "Value";
-    ws.getCell("K6").value = "Ket.";
+    ws.getCell("B6").value = "(Inci)"; ws.getCell("D6").value = "(Rp)"; ws.getCell("E6").value = "(SW)";
+    ws.getCell("F6").value = "Store"; ws.getCell("G6").value = "Storage"; ws.getCell("H6").value = "Jumlah";
+    ws.getCell("I6").value = "QTY"; ws.getCell("J6").value = "Value"; ws.getCell("K6").value = "Ket.";
 
     rows.forEach((row) => {
       const r = ws.addRow([row["No."], row["Kode (Inci)"], row["Nama Produk"], row["Price (Rp)"], row["Stockwiz (SW)"], row["Store"], row["Storage"], row["Jumlah Riil"], row["Selisih QTY"], row["Selisih Value"], row["Status"]]);
       r.height = 15;
       r.eachCell((cell, colNum) => {
-        Object.assign(cell.style, cellBorder);
+        Object.assign(cell.style, thinBorder);
         if ([1, 4, 5, 6, 7, 8, 9].includes(colNum)) cell.style.alignment = { ...cell.style.alignment, horizontal: "center" };
         if (colNum === 10) { cell.style.alignment = { ...cell.style.alignment, horizontal: "right" }; if (typeof cell.value === "number") cell.numFmt = "#,##0"; }
         if (colNum === 4 && typeof cell.value === "number") cell.numFmt = "#,##0";
@@ -394,6 +445,86 @@ export default function OpnamePage() {
 
     ws.columns = [{ width: 5 }, { width: 16 }, { width: 48 }, { width: 12 }, { width: 10 }, { width: 10 }, { width: 10 }, { width: 10 }, { width: 10 }, { width: 16 }, { width: 10 }];
     ws.views = [{ state: "frozen", ySplit: 6 }];
+
+    // ── Sheet 2: Summary Selisih ─────────────────────────────────
+    const ws2 = wb.addWorksheet("Summary Selisih");
+    ws2.columns = [{ width: 18 }, { width: 48 }, { width: 8 }, { width: 9 }, { width: 11 }, { width: 11 }, { width: 13 }, { width: 20 }, { width: 12 }];
+
+    const setStyle = (cell: ExcelJS.Cell, style: Partial<ExcelJS.Style>) => { cell.style = style; };
+    const hdrStyle = headerStyle();
+    const dataStyle = (fill?: string, bold?: boolean, color?: string, align?: ExcelJS.Alignment["horizontal"], numFmt?: string): Partial<ExcelJS.Style> => ({
+      border: { top: { style: "thin", color: { argb: "FFCCCCCC" } }, bottom: { style: "thin", color: { argb: "FFCCCCCC" } }, left: { style: "thin", color: { argb: "FFCCCCCC" } }, right: { style: "thin", color: { argb: "FFCCCCCC" } } },
+      fill: fill ? { type: "pattern", pattern: "solid", fgColor: { argb: fill } } : { type: "pattern", pattern: "none" },
+      font: { bold: !!bold, size: 9, color: { argb: color ?? BLACK } },
+      alignment: { horizontal: align ?? "left", vertical: "middle" },
+      ...(numFmt ? { numFmt } : {}),
+    });
+
+    // Title rows
+    const r1 = ws2.addRow(["RINGKASAN SELISIH — STOCK OPNAME SENSATIA"]);
+    r1.height = 20;
+    setStyle(r1.getCell(1), { font: { bold: true, size: 13, color: { argb: BLACK } }, alignment: { vertical: "middle" } });
+
+    const r2 = ws2.addRow([`Tanggal Export: ${new Date().toLocaleDateString("id-ID")}`]);
+    setStyle(r2.getCell(1), { font: { size: 9, color: { argb: "FF888888" } } });
+
+    ws2.addRow([]);
+
+    // Aggregate header
+    const ah = ws2.addRow(["Metrik", "QTY", "Nilai (Rp)", "", "", "", "", "", ""]);
+    ah.height = 18;
+    [1, 2, 3].forEach(c => setStyle(ah.getCell(c), hdrStyle));
+
+    // Aggregate data
+    const aggItems: [string, number | string, number | string, boolean][] = [
+      ["Produk Selisih", `${selisihRows.length} dari ${totalProducts} SKU`, "", false],
+      ["Total Minus", totalMinusQty, totalMinusVal, false],
+      ["Total Plus", `+${totalPlusQty}`, totalPlusVal > 0 ? `+${totalPlusVal.toLocaleString("id-ID")}` : totalPlusVal, false],
+      ["Net Selisih", netQty > 0 ? `+${netQty}` : netQty, netValue, true],
+    ];
+    aggItems.forEach(([label, qty, val, isNet]) => {
+      const row = ws2.addRow([label, qty, val]);
+      row.height = 17;
+      const color = isNet ? (netQty < 0 ? RED : GREEN) : BLACK;
+      setStyle(row.getCell(1), dataStyle("FFFFFFFF", isNet, color));
+      setStyle(row.getCell(2), dataStyle("FFFFFFFF", isNet, color, "right"));
+      setStyle(row.getCell(3), dataStyle("FFFFFFFF", isNet, color, "right"));
+    });
+
+    ws2.addRow([]);
+    ws2.addRow([]);
+
+    // Detail header
+    const dh = ws2.addRow(["Kode (Inci)", "Nama Produk", "SW", "Store", "Storage", "Jumlah", "Selisih QTY", "Selisih Value (Rp)", "Status"]);
+    dh.height = 18;
+    [1,2,3,4,5,6,7,8,9].forEach(c => setStyle(dh.getCell(c), hdrStyle));
+
+    // Detail rows
+    selisihRows.forEach((r, i) => {
+      const isMinus = r.status === "Minus";
+      const rowColor = i % 2 === 0 ? (isMinus ? LIGHT_RED : LIGHT_GREEN) : (isMinus ? "FFFFCDD2" : "FFC8E6C9");
+      const textColor = isMinus ? RED : GREEN;
+      const row = ws2.addRow([r.product.code, r.product.name, r.sw ?? "", r.store, r.storage, r.jumlahRiil, r.selisihQty ?? 0, r.selisihValue ?? 0, r.status]);
+      row.height = 15;
+      setStyle(row.getCell(1), dataStyle(rowColor, true, "FF3949AB"));        // code indigo bold
+      setStyle(row.getCell(2), dataStyle(rowColor, false, BLACK));             // name
+      setStyle(row.getCell(3), dataStyle(rowColor, false, BLACK, "center"));   // sw
+      setStyle(row.getCell(4), dataStyle(rowColor, false, BLACK, "center"));   // store
+      setStyle(row.getCell(5), dataStyle(rowColor, false, BLACK, "center"));   // storage
+      setStyle(row.getCell(6), dataStyle(rowColor, true, BLACK, "center"));    // jumlah
+      setStyle(row.getCell(7), dataStyle(rowColor, true, textColor, "center")); // selisih qty
+      setStyle(row.getCell(8), { ...dataStyle(rowColor, true, textColor, "right", "#,##0") }); // selisih value
+      setStyle(row.getCell(9), dataStyle(rowColor, true, textColor, "center")); // status
+    });
+
+    // Footer total
+    const totalRow = ws2.addRow(["TOTAL", "", "", "", "", "", netQty, netValue, ""]);
+    totalRow.height = 18;
+    const netColor = netQty < 0 ? RED : GREEN;
+    [1,2,3,4,5,6].forEach(c => setStyle(totalRow.getCell(c), dataStyle(GRAY, true, BLACK)));
+    setStyle(totalRow.getCell(7), dataStyle(GRAY, true, netColor, "center"));
+    setStyle(totalRow.getCell(8), { ...dataStyle(GRAY, true, netColor, "right", "#,##0") });
+    setStyle(totalRow.getCell(9), dataStyle(GRAY, true, BLACK));
 
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
@@ -571,15 +702,75 @@ export default function OpnamePage() {
         </div>
       )}
 
-      {/* ── Print Header ────────────────────────────────────────── */}
+      {/* ── Print Header + Summary ──────────────────────────────── */}
       <div className="hidden print:block px-6 pt-4 pb-2 text-xs">
         <p className="font-bold text-base mb-2">Stock Opname — Sensatia Botanicals</p>
-        <div className="flex gap-8">
+        <div className="flex gap-8 mb-3">
           <span><b>Unit Kerja</b> : Sensatia</span>
           <span><b>Tanggal Audit</b> :</span>
           <span><b>Pukul</b> : WITA</span>
         </div>
-        <hr className="my-3" />
+
+        {/* Print summary aggregates */}
+        {(() => {
+          const { selisihRows, totalMinusQty, totalPlusQty, totalMinusVal, totalPlusVal, netQty, netValue } = buildSummary();
+          if (selisihRows.length === 0) return <hr className="my-3" />;
+          return (
+            <>
+              <hr className="my-3" />
+              <p className="font-bold text-sm mb-2">Ringkasan Selisih</p>
+              <table style={{ width: "auto", borderCollapse: "collapse", marginBottom: "8px" }}>
+                <thead>
+                  <tr style={{ backgroundColor: "#FDD835" }}>
+                    <th style={{ border: "1px solid #999", padding: "2px 8px" }}>Metrik</th>
+                    <th style={{ border: "1px solid #999", padding: "2px 8px" }}>QTY</th>
+                    <th style={{ border: "1px solid #999", padding: "2px 8px" }}>Nilai (Rp)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td style={{ border: "1px solid #ccc", padding: "2px 8px" }}>Produk Selisih</td><td style={{ border: "1px solid #ccc", padding: "2px 8px", textAlign: "right" }}>{selisihRows.length}</td><td style={{ border: "1px solid #ccc", padding: "2px 8px" }}></td></tr>
+                  <tr><td style={{ border: "1px solid #ccc", padding: "2px 8px" }}>Total Minus</td><td style={{ border: "1px solid #ccc", padding: "2px 8px", textAlign: "right", color: "#cc0000", fontWeight: "bold" }}>{totalMinusQty}</td><td style={{ border: "1px solid #ccc", padding: "2px 8px", textAlign: "right", color: "#cc0000", fontWeight: "bold" }}>{totalMinusVal.toLocaleString("id-ID")}</td></tr>
+                  <tr><td style={{ border: "1px solid #ccc", padding: "2px 8px" }}>Total Plus</td><td style={{ border: "1px solid #ccc", padding: "2px 8px", textAlign: "right", color: "#2e7d32", fontWeight: "bold" }}>+{totalPlusQty}</td><td style={{ border: "1px solid #ccc", padding: "2px 8px", textAlign: "right", color: "#2e7d32", fontWeight: "bold" }}>+{totalPlusVal.toLocaleString("id-ID")}</td></tr>
+                  <tr style={{ backgroundColor: "#f5f5f5", fontWeight: "bold" }}><td style={{ border: "1px solid #999", padding: "2px 8px" }}>Net Selisih</td><td style={{ border: "1px solid #999", padding: "2px 8px", textAlign: "right", color: netQty < 0 ? "#cc0000" : "#2e7d32" }}>{netQty > 0 ? "+" : ""}{netQty}</td><td style={{ border: "1px solid #999", padding: "2px 8px", textAlign: "right", color: netValue < 0 ? "#cc0000" : "#2e7d32" }}>{netValue > 0 ? "+" : ""}{netValue.toLocaleString("id-ID")}</td></tr>
+                </tbody>
+              </table>
+
+              <p className="font-bold text-sm mb-1">Daftar Produk Selisih ({selisihRows.length} produk)</p>
+              <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "12px" }}>
+                <thead>
+                  <tr style={{ backgroundColor: "#FDD835" }}>
+                    {["Kode","Nama Produk","SW","Store","Storage","Jumlah","Selisih QTY","Selisih Value","Status"].map(h => (
+                      <th key={h} style={{ border: "1px solid #999", padding: "2px 4px" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {selisihRows.map(r => (
+                    <tr key={r.product.code} style={{ backgroundColor: r.status === "Minus" ? "#fff8f8" : "#f0fff4" }}>
+                      <td style={{ border: "1px solid #ccc", padding: "2px 4px", fontFamily: "monospace" }}>{r.product.code}</td>
+                      <td style={{ border: "1px solid #ccc", padding: "2px 4px" }}>{r.product.name}</td>
+                      <td style={{ border: "1px solid #ccc", padding: "2px 4px", textAlign: "center" }}>{r.sw ?? ""}</td>
+                      <td style={{ border: "1px solid #ccc", padding: "2px 4px", textAlign: "center" }}>{r.store}</td>
+                      <td style={{ border: "1px solid #ccc", padding: "2px 4px", textAlign: "center" }}>{r.storage}</td>
+                      <td style={{ border: "1px solid #ccc", padding: "2px 4px", textAlign: "center", fontWeight: "bold" }}>{r.jumlahRiil}</td>
+                      <td style={{ border: "1px solid #ccc", padding: "2px 4px", textAlign: "center", fontWeight: "bold", color: r.selisihQty! < 0 ? "#cc0000" : "#2e7d32" }}>{r.selisihQty! > 0 ? "+" : ""}{r.selisihQty}</td>
+                      <td style={{ border: "1px solid #ccc", padding: "2px 4px", textAlign: "right", color: r.selisihValue !== undefined && r.selisihValue < 0 ? "#cc0000" : "#2e7d32" }}>{r.selisihValue !== undefined ? (r.selisihValue > 0 ? "+" : "") + r.selisihValue.toLocaleString("id-ID") : ""}</td>
+                      <td style={{ border: "1px solid #ccc", padding: "2px 4px", textAlign: "center", fontWeight: "bold", color: r.status === "Minus" ? "#cc0000" : "#2e7d32" }}>{r.status}</td>
+                    </tr>
+                  ))}
+                  <tr style={{ backgroundColor: "#f5f5f5", fontWeight: "bold" }}>
+                    <td colSpan={6} style={{ border: "1px solid #999", padding: "2px 4px" }}>TOTAL</td>
+                    <td style={{ border: "1px solid #999", padding: "2px 4px", textAlign: "center", color: netQty < 0 ? "#cc0000" : "#2e7d32" }}>{netQty > 0 ? "+" : ""}{netQty}</td>
+                    <td style={{ border: "1px solid #999", padding: "2px 4px", textAlign: "right", color: netValue < 0 ? "#cc0000" : "#2e7d32" }}>{netValue > 0 ? "+" : ""}{netValue.toLocaleString("id-ID")}</td>
+                    <td style={{ border: "1px solid #999", padding: "2px 4px" }}></td>
+                  </tr>
+                </tbody>
+              </table>
+              <hr className="my-3" />
+              <p className="font-bold text-sm mb-2">Detail Semua Produk</p>
+            </>
+          );
+        })()}
       </div>
 
       {/* ── Summary Selisih ──────────────────────────────────────── */}
@@ -705,26 +896,26 @@ export default function OpnamePage() {
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           <table className="w-full border-collapse text-sm">
             <thead>
-              <tr className="bg-[#FDD835] text-[#1A1D2E] font-bold text-center text-xs">
-                <th className="border-b-2 border-yellow-400 px-3 py-3" rowSpan={2}>No.</th>
-                <th className="border-b border-yellow-400 px-3 py-3">Kode</th>
-                <th className="border-b-2 border-yellow-400 px-4 py-3 text-left" rowSpan={2}>Nama Produk</th>
-                <th className="border-b border-yellow-400 px-3 py-3">Price</th>
-                <th className="border-b border-yellow-400 px-3 py-3">Stockwiz</th>
-                <th className="border-b border-yellow-400 px-3 py-3" colSpan={3}>Jumlah Riil</th>
-                <th className="border-b border-yellow-400 px-3 py-3" colSpan={2}>Total Selisih</th>
-                <th className="border-b-2 border-yellow-400 px-3 py-3">Status</th>
+              <tr className="bg-[#FDD835] text-[#1A1D2E] font-bold text-center text-sm">
+                <th className="border-b-2 border-yellow-400 px-3 py-3.5" rowSpan={2}>No.</th>
+                <th className="border-b border-yellow-400 px-3 py-3.5">Kode</th>
+                <th className="border-b-2 border-yellow-400 px-4 py-3.5 text-left" rowSpan={2}>Nama Produk</th>
+                <th className="border-b border-yellow-400 px-3 py-3.5">Price</th>
+                <th className="border-b border-yellow-400 px-3 py-3.5">Stockwiz</th>
+                <th className="border-b border-yellow-400 px-3 py-3.5" colSpan={3}>Jumlah Riil</th>
+                <th className="border-b border-yellow-400 px-3 py-3.5" colSpan={2}>Total Selisih</th>
+                <th className="border-b-2 border-yellow-400 px-3 py-3.5">Status</th>
               </tr>
-              <tr className="bg-[#FDD835] text-[#1A1D2E]/60 font-semibold text-center text-[11px]">
-                <th className="border-b-2 border-yellow-500 px-3 py-2">(Inci)</th>
-                <th className="border-b-2 border-yellow-500 px-3 py-2">(Rp)</th>
-                <th className="border-b-2 border-yellow-500 px-3 py-2">(SW)</th>
-                <th className="border-b-2 border-yellow-500 px-3 py-2 bg-yellow-300/60">Store</th>
-                <th className="border-b-2 border-yellow-500 px-3 py-2 bg-yellow-300/60">Storage</th>
-                <th className="border-b-2 border-yellow-500 px-3 py-2">Jumlah</th>
-                <th className="border-b-2 border-yellow-500 px-3 py-2">QTY</th>
-                <th className="border-b-2 border-yellow-500 px-3 py-2">Value</th>
-                <th className="border-b-2 border-yellow-500 px-3 py-2">Ket.</th>
+              <tr className="bg-[#FDD835] text-[#1A1D2E]/70 font-semibold text-center text-xs">
+                <th className="border-b-2 border-yellow-500 px-3 py-2.5">(Inci)</th>
+                <th className="border-b-2 border-yellow-500 px-3 py-2.5">(Rp)</th>
+                <th className="border-b-2 border-yellow-500 px-3 py-2.5">(SW)</th>
+                <th className="border-b-2 border-yellow-500 px-3 py-2.5 bg-yellow-300/60">Store</th>
+                <th className="border-b-2 border-yellow-500 px-3 py-2.5 bg-yellow-300/60">Storage</th>
+                <th className="border-b-2 border-yellow-500 px-3 py-2.5">Jumlah</th>
+                <th className="border-b-2 border-yellow-500 px-3 py-2.5">QTY</th>
+                <th className="border-b-2 border-yellow-500 px-3 py-2.5">Value</th>
+                <th className="border-b-2 border-yellow-500 px-3 py-2.5">Ket.</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
